@@ -34,7 +34,7 @@ Starts the Streamlit server on port 8501. In Codespaces, click the **Open in Bro
 
 ## Live Dashboard
 
-🔗 [View the hosted dashboard](<YOUR_STREAMLIT_CLOUD_URL_HERE>)
+🔗 git add README.md[View the hosted dashboard](https://loblawbioanalysis.streamlit.app/)
 
 ---
 
