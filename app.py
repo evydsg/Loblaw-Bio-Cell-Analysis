@@ -9,6 +9,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
+import load_data
+
 
 from frequencies import get_frequency_table
 from responder_analysis import get_group_data, make_boxplots, run_tests
@@ -29,6 +31,15 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+_DB_FILE = Path(__file__).resolve().parent / "loblaw.db"
+
+@st.cache_resource
+def ensure_database():
+    if not _DB_FILE.exists():
+        load_data.main()
+
+ensure_database()
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
