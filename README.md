@@ -21,7 +21,7 @@ make pipeline
 Runs all four analysis scripts in order:
 - `load_data.py` — creates `loblaw.db` and loads `cell-count.csv`
 - `frequencies.py` — computes relative cell population frequencies
-- `responder_analysis.py` — compares responders vs non-responders (Part 3)
+- `responder_analysis.py` — compares responders vs non-responders at day 0 and all timepoints pooled (Part 3)
 - `subset_analysis.py` — runs the baseline subset queries (Part 4)
 
 ### 3. Start the dashboard
@@ -66,9 +66,11 @@ For each of the 10,500 samples, the five cell counts (b_cell, cd4_t_cell, cd8_t_
 ### Part 3 — Responders vs Non-Responders
 **Group:** melanoma patients treated with miraclib, PBMC samples, baseline (day 0) only. Each patient contributes one sample, keeping comparisons independent.
 
-**Method:** two-sided Mann-Whitney U test per population, corrected for five simultaneous comparisons using the Benjamini-Hochberg method (α = 0.05). We used day 0 only because Bob's goal is to *predict* response before treatment takes effect. We also checked days 7 and 14; no population was significant after correction at either time point.
+**Method:** two-sided Mann-Whitney U test per population, corrected for five simultaneous comparisons using the Benjamini-Hochberg method (α = 0.05). The main analysis uses day 0 only, because Bob's goal is to *predict* response before treatment takes effect and one sample per patient keeps the samples independent. Because the spec does not restrict time, the pipeline also reports all timepoints pooled, and the dashboard has a timepoint selector (day 0 / 7 / 14 / pooled).
 
-**Result:** no population showed a significant difference between responders (n = 331) and non-responders (n = 325). All adjusted p-values = 0.885. Median differences were at most 0.7 percentage points and effect sizes were negligible (all below 0.06). These five cell populations do not predict response to miraclib at baseline in this dataset.
+**Result (day 0, main analysis):** no population showed a significant difference between responders (n = 331) and non-responders (n = 325). All adjusted p-values = 0.885, median differences were at most 0.7 percentage points, and effect sizes were negligible (all below 0.06). We found no evidence that these five populations predict response to miraclib at baseline.
+
+**Result (all timepoints pooled, 1,968 samples):** `cd4_t_cell` is higher in responders (median +0.56 points, p = 0.013) but not significant after correction (adjusted p = 0.067). Pooling counts each patient three times, which breaks the test's independence assumption, so this is a lead to follow up rather than a finding. No population was significant after correction at day 7 or day 14 either.
 
 ### Part 4 — Subset Analysis
 **Baseline group** (melanoma · miraclib · PBMC · day 0 · n = 656):
@@ -90,7 +92,7 @@ For each of the 10,500 samples, the five cell counts (b_cell, cd4_t_cell, cd8_t_
 | pandas | ≥ 2.0 | Data manipulation |
 | scipy | ≥ 1.11 | Statistical tests |
 | matplotlib | ≥ 3.9 | Charts and boxplots |
-| streamlit | ≥ 1.30 | Interactive dashboard |
+| streamlit | ≥ 1.50 | Interactive dashboard |
 
 ---
 

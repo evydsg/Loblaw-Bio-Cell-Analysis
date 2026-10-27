@@ -67,12 +67,18 @@ def subjects_by_sex(df: pd.DataFrame) -> pd.DataFrame:
     return out.rename("n_subjects").reset_index()
 
 
+def avg_b_cell_male_responders_summary(db_path=DB_PATH) -> dict:
+    """Average B cell count (rounded to two decimals) plus the size of the
+    group: melanoma males, responders, time 0, all sample types and treatments."""
+    with sqlite3.connect(db_path) as conn:
+        avg, n_samples, n_subjects = conn.execute(AVG_B_CELL_SQL).fetchone()
+    return {"avg_b_cell": round(avg, 2), "n_samples": n_samples, "n_subjects": n_subjects}
+
+
 def avg_b_cell_male_responders(db_path=DB_PATH) -> float:
     """Average B cell count: melanoma males, responders, time 0, all sample
     types and all treatments. Returned rounded to two decimals."""
-    with sqlite3.connect(db_path) as conn:
-        avg = conn.execute(AVG_B_CELL_SQL).fetchone()[0]
-    return round(avg, 2)
+    return avg_b_cell_male_responders_summary(db_path)["avg_b_cell"]
 
 
 def main():

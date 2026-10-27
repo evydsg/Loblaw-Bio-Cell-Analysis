@@ -2,20 +2,19 @@
 
 Run with:  streamlit run app.py  (or: make dashboard)
 """
+import sqlite3
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import pandas as pd
 import streamlit as st
+
 import load_data
-
-
 from frequencies import get_frequency_table
-from responder_analysis import get_group_data, make_boxplots, run_tests
+from responder_analysis import ALPHA, get_group_data, make_boxplots, run_tests, timepoint_label
 from subset_analysis import (
-    avg_b_cell_male_responders,
+    avg_b_cell_male_responders_summary,
     get_baseline_samples,
     samples_per_project,
     subjects_by_response,
@@ -32,14 +31,23 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-_DB_FILE = Path(__file__).resolve().parent / "loblaw.db"
-
 @st.cache_resource
 def ensure_database():
-    if not _DB_FILE.exists():
+    if not DB_PATH.exists():
         load_data.main()
 
 ensure_database()
+
+
+def get_overview(db_path=DB_PATH) -> dict:
+    """Row counts per table, project ids and sampling timepoints, from the database."""
+    with sqlite3.connect(db_path) as conn:
+        counts = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                  for t in ["projects", "subjects", "samples", "cell_counts"]}
+        projects = [r[0] for r in conn.execute("SELECT project_id FROM projects ORDER BY project_id")]
+        timepoints = [r[0] for r in conn.execute(
+            "SELECT DISTINCT time_from_treatment_start FROM samples ORDER BY 1")]
+    return {"counts": counts, "projects": projects, "timepoints": timepoints}
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -152,7 +160,7 @@ for col, (key, icon, label, tip) in zip(
         is_active = st.session_state.page == key
         if st.button(
             f"{icon} {label}",
-            use_container_width=True,
+            width="stretch",
             help=tip,
             type="primary" if is_active else "secondary",
         ):
@@ -231,6 +239,10 @@ if page == "Home":
 
     st.markdown('<div class="section-header">🗂️ About the Data</div>', unsafe_allow_html=True)
 
+    overview = get_overview(DB_PATH)
+    n = overview["counts"]
+    days = ", ".join(str(t) for t in overview["timepoints"][:-1]) + f" and {overview['timepoints'][-1]}"
+
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("""
@@ -256,14 +268,14 @@ if page == "Home":
         </div>
         """, unsafe_allow_html=True)
     with c2:
-        st.markdown("""
+        st.markdown(f"""
         <div class="info-card">
             <h4>📊 Scale of the Trial</h4>
             <p>
-                <strong>3</strong> projects (prj1, prj2, prj3)<br>
-                <strong>3,500</strong> subjects (patients)<br>
-                <strong>10,500</strong> samples — each patient gave 3 samples, at day 0, 7, and 14<br>
-                <strong>52,500</strong> cell count measurements in total
+                <strong>{n['projects']:,}</strong> projects ({", ".join(overview["projects"])})<br>
+                <strong>{n['subjects']:,}</strong> subjects (patients)<br>
+                <strong>{n['samples']:,}</strong> samples — collected at day {days}<br>
+                <strong>{n['cell_counts']:,}</strong> cell count measurements in total
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -285,10 +297,10 @@ if page == "Home":
         "We reorganised it into a **relational SQLite database** with four linked tables:"
     )
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Projects table", "3 rows", "One row per study")
-    c2.metric("Subjects table", "3,500 rows", "One row per patient")
-    c3.metric("Samples table", "10,500 rows", "One row per blood draw")
-    c4.metric("Cell counts table", "52,500 rows", "One row per cell type per sample")
+    c1.metric("Projects table", f"{n['projects']:,} rows", "One row per study")
+    c2.metric("Subjects table", f"{n['subjects']:,} rows", "One row per patient")
+    c3.metric("Samples table", f"{n['samples']:,} rows", "One row per blood draw")
+    c4.metric("Cell counts table", f"{n['cell_counts']:,} rows", "One row per cell type per sample")
     st.write(
         "Storing each fact once avoids contradictions, makes queries fast, "
         "and means adding a sixth cell type later needs no redesign."
@@ -362,65 +374,79 @@ elif page == "Part2":
         display = view.style.format({"percentage": "{:.2f}", "total_count": "{:,}", "count": "{:,}"})
     else:
         display = view
-    st.dataframe(display, use_container_width=True, height=400)
+    st.dataframe(display, width="stretch", height=400)
     st.caption(f"Showing {len(view):,} of {len(df):,} rows.")
 
 # ── Part 3 ────────────────────────────────────────────────────────────────────
 elif page == "Part3":
     st.markdown("# Part 3: Responders vs Non-Responders")
     st.markdown("""
-    **What we did:** Bob wants to know whether the immune cell frequencies at baseline can predict
-    who will respond to miraclib. We filtered the data to **melanoma patients on miraclib, PBMC samples,
-    at day 0** (before treatment has had any effect), giving one sample per patient and keeping the
-    comparison independent. We then compared the five cell population frequencies between
-    **331 responders** and **325 non-responders** using the **Mann-Whitney U test**, which does not
-    assume normally distributed data. Because we ran five tests (one per population), we corrected
-    for multiple comparisons using the **Benjamini-Hochberg method** (α = 0.05) to avoid false positives.
+    **What we did:** Bob wants to know whether immune cell frequencies can predict who will respond
+    to miraclib. We filtered the data to **melanoma patients on miraclib, PBMC samples**, and compared
+    the five cell population frequencies between responders and non-responders using the
+    **Mann-Whitney U test**, which does not assume normally distributed data. Because we ran five tests
+    (one per population), we corrected for multiple comparisons using the **Benjamini-Hochberg method**
+    (α = 0.05) to avoid false positives.
+
+    **Recommended view: day 0 (baseline).** It shows the cells *before* treatment has had any effect,
+    which is what matters for predicting response, and each patient contributes one sample, so the
+    samples are independent as the test assumes. Pooling all timepoints counts each patient up to
+    three times, which makes p-values look stronger than they should.
     """)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Patients analysed", "656")
-    c2.metric("Responders", "331")
-    c3.metric("Non-responders", "325")
+    tp_options = {"Day 0 (baseline, recommended)": 0, "Day 7": 7, "Day 14": 14, "All timepoints pooled": None}
+    tp_choice = st.radio("Timepoint", list(tp_options), horizontal=True)
+    timepoint = tp_options[tp_choice]
 
-    data = get_group_data(DB_PATH)
+    data = get_group_data(DB_PATH, timepoint=timepoint)
     res  = run_tests(data)
+    patients = data.drop_duplicates("subject_id")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Samples analysed", f"{data['sample'].nunique():,}")
+    c2.metric("Patients", f"{len(patients):,}")
+    c3.metric("Responders", f"{(patients['response'] == 'yes').sum():,}")
+    c4.metric("Non-responders", f"{(patients['response'] == 'no').sum():,}")
 
     st.markdown('<div class="section-header">📦 Boxplots: Cell Population Frequencies by Response</div>', unsafe_allow_html=True)
     st.write("Each box shows the spread of relative frequencies for one cell population. Responders are on the left, non-responders on the right.")
-    fig_path = ROOT / "outputs" / "part3_boxplots.png"
-    if not fig_path.exists():
-        fig_path.parent.mkdir(exist_ok=True)
-        make_boxplots(data, res, fig_path)
-    st.image(str(fig_path), use_container_width=True)
+    fig = make_boxplots(data, res, timepoint)
+    st.pyplot(fig)
+    plt.close(fig)
 
     st.markdown('<div class="section-header">📋 Statistical Results</div>', unsafe_allow_html=True)
-    st.write("Two-sided Mann-Whitney U test per population · Benjamini-Hochberg correction · α = 0.05")
+    st.write("Two-sided Mann-Whitney U test per population · Benjamini-Hochberg correction · α = 0.05 · "
+             "effect size = rank-biserial correlation (−1 to +1)")
     display_res = res[[
         "population", "n_responders", "n_non_responders",
         "median_responders", "median_non_responders",
-        "median_difference", "p_value", "p_adjusted", "significant"
+        "median_difference", "effect_size", "p_value", "p_adjusted", "significant"
     ]].copy()
     st.dataframe(
         display_res.style.format({
             "median_responders": "{:.2f}", "median_non_responders": "{:.2f}",
-            "median_difference": "{:.2f}", "p_value": "{:.4f}", "p_adjusted": "{:.4f}",
+            "median_difference": "{:.2f}", "effect_size": "{:.3f}",
+            "p_value": "{:.4f}", "p_adjusted": "{:.4f}",
         }),
-        use_container_width=True,
+        width="stretch",
     )
 
     sig = res.loc[res["significant"], "population"].tolist()
+    nominal = res.loc[(res["p_value"] < ALPHA) & ~res["significant"], "population"].tolist()
     if sig:
         st.markdown(f'<div class="finding-box">✅ <strong>Significant populations after correction:</strong> {", ".join(sig)}</div>', unsafe_allow_html=True)
     else:
-        st.markdown("""
+        nominal_note = (
+            f" {', '.join(nominal)} reached p &lt; {ALPHA} before correction, but not after, "
+            "so it should be treated as a lead to follow up rather than a finding."
+            if nominal else ""
+        )
+        st.markdown(f"""
         <div class="warning-box">
-        ⚠️ <strong>No significant differences found.</strong><br><br>
-        At baseline, none of the five cell populations differ significantly between responders and
-        non-responders (all adjusted p = 0.885, well above the 0.05 threshold). The median differences
-        are small (at most 0.7 percentage points) and effect sizes are negligible (all below 0.06).
-        With 656 patients we had sufficient power to detect a real difference, so this result reflects
-        a genuine absence of a predictive signal in these five populations at baseline.
+        ⚠️ <strong>No significant differences after correction ({timepoint_label(timepoint)}).</strong><br><br>
+        Smallest adjusted p = {res['p_adjusted'].min():.3f} (threshold {ALPHA}). Median differences
+        are at most {res['median_difference'].abs().max():.2f} percentage points and the largest
+        effect size is {res['effect_size'].abs().max():.3f}.{nominal_note}
         </div>
         """, unsafe_allow_html=True)
 
@@ -430,9 +456,9 @@ elif page == "Part4":
     st.markdown("""
     **What we did:** Bob wanted to explore a specific slice of the data to understand early treatment effects.
     We queried the database for **melanoma patients treated with miraclib, PBMC samples only, at baseline
-    (day 0)**. This gave us 656 samples. We then broke this group down by project, treatment response,
-    and sex. Finally, we answered a separate question about the average B cell count for a broader group:
-    melanoma males who are responders at day 0, across all sample and treatment types.
+    (day 0)**, then broke this group down by project, treatment response, and sex. Finally, we answered
+    a separate question about the average B cell count for a broader group: melanoma males who are
+    responders at day 0, across all sample and treatment types.
     """)
 
     baseline = get_baseline_samples(DB_PATH)
@@ -458,8 +484,11 @@ elif page == "Part4":
         fig.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
-        st.dataframe(proj, use_container_width=True, hide_index=True)
-        st.caption("Note: prj2 has no melanoma patients on miraclib with PBMC samples at day 0.")
+        st.dataframe(proj, width="stretch", hide_index=True)
+        missing = sorted(set(get_overview(DB_PATH)["projects"]) - set(proj["project_id"]))
+        if missing:
+            st.caption(f"Note: {', '.join(missing)} has no melanoma patients on miraclib "
+                       "with PBMC samples at day 0.")
 
     with c2:
         st.markdown("#### Subjects by response")
@@ -475,7 +504,7 @@ elif page == "Part4":
         fig.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
-        st.dataframe(resp, use_container_width=True, hide_index=True)
+        st.dataframe(resp, width="stretch", hide_index=True)
 
     with c3:
         st.markdown("#### Subjects by sex")
@@ -491,13 +520,13 @@ elif page == "Part4":
         fig.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
-        st.dataframe(sex, use_container_width=True, hide_index=True)
+        st.dataframe(sex, width="stretch", hide_index=True)
 
+    b_cell = avg_b_cell_male_responders_summary(DB_PATH)
     st.markdown('<div class="section-header">🧫 Average B Cell Count — Melanoma Male Responders at Day 0</div>', unsafe_allow_html=True)
     st.write(
         "This question uses a broader filter: **melanoma males who are responders at time = 0**, "
         "across **all** sample types (PBMC and whole blood) and **all** treatments (miraclib and phauximab). "
-        "This group has 485 samples from 485 distinct patients."
+        f"This group has {b_cell['n_samples']:,} samples from {b_cell['n_subjects']:,} distinct patients."
     )
-    avg = avg_b_cell_male_responders(DB_PATH)
-    st.metric("Average B cell count", f"{avg:.2f}")
+    st.metric("Average B cell count", f"{b_cell['avg_b_cell']:.2f}")
